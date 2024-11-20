@@ -50,6 +50,7 @@ abstract contract HumanResources is IHumanResources {
         return (employeeInfo.weeklyUsdSalary, employeeInfo.employedSince, employeeInfo.terminatedAt);
     } 
 
+    // complete implementation, check if accumulated salary should continue or not
     function registerEmployee (address employee, uint256 weeklyUsdSalary) external {
         uint256 checkEmployee = employeeMap[employee].weeklyUsdSalary;
         if (checkEmployee == 0){
