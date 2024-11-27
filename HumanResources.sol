@@ -6,6 +6,8 @@ import "./IHumanResources.sol";
 
 abstract contract HumanResources is IHumanResources {
 
+   
+
     enum preferredPay {USDC, ETH}
 
     struct Employee{
@@ -13,16 +15,19 @@ abstract contract HumanResources is IHumanResources {
         uint256 employedSince;
         uint256 terminatedAt;
         uint256 accumulated;
+        uint256 lastWithdrawalStamp;
         preferredPay preference;
     }
 
     address public immutable hrManagerAddress; 
-    mapping(address => Employee) public employeeMap;
+    mapping(address => Employee) private employeeMap;
     address[] public employeeAddresses;
     uint256 employeeCount;
 
-    constructor(){
-        hrManagerAddress = msg.sender; 
+    constructor(address _hrManager){
+        hrManagerAddress = _hrManager; 
+        swapRouter = ISwapRouter(ROUTER);
+        usdc = IERC(USDC);
     }
 
     modifier onlyHrManager(){
@@ -30,9 +35,12 @@ abstract contract HumanResources is IHumanResources {
         _;
     }
 
+    modifier onlyEmployee(){
+        require(employeeMap[msg.sender].employedSince != 0, NotAuthorized());
+    }
+
     function salaryAvailable (address employee) external view returns (uint256){
-        Employee memory employeeInfo = employeeMap[employee];
-        return employeeInfo.weeklyUsdSalary;
+        return ((block.timestamp - employeeMap[employee].lastWithdrawalStamp) / 1 weeks) * employeeMap[employee].weeklyUsdSalary;
     }
 
     function hrManager() external view returns (address){
@@ -46,25 +54,21 @@ abstract contract HumanResources is IHumanResources {
     function getEmployeeInfo(address employee) external view returns(uint256, uint256, uint256){
         Employee memory employeeInfo = employeeMap[employee];
         return (employeeInfo.weeklyUsdSalary, employeeInfo.employedSince, employeeInfo.terminatedAt);
-    } 
+    }
+
+
 
     function registerEmployee (address employee, uint256 weeklyUsdSalary) onlyHrManager external {
         uint256 checkEmployee = employeeMap[employee].employedSince;
-        uint256 checkEmployee2 = employeeMap[employee].terminatedAt;
         if (checkEmployee == 0){
-            Employee memory newEmployee = Employee(weeklyUsdSalary * 10**18, block.timestamp, 0, 0, preferredPay.USDC);
+            Employee memory newEmployee = Employee(weeklyUsdSalary, block.timestamp, 0, 0, block.timestamp, preferredPay.USDC);
             employeeMap[employee] = newEmployee;
             employeeAddresses.push(employee);
             employeeCount += 1;
             emit EmployeeRegistered(employee, weeklyUsdSalary);
         }
-        else if (checkEmployee2 == 0){
-            revert EmployeeAlreadyRegistered();
-        }
         else {
-            employeeMap[employee].weeklyUsdSalary = weeklyUsdSalary * 10**18;
-            employeeMap[employee].employedSince = block.timestamp;
-            employeeMap[employee].terminatedAt = 0;
+            revert EmployeeAlreadyRegistered();
         }
     }
 
@@ -73,9 +77,14 @@ abstract contract HumanResources is IHumanResources {
             revert EmployeeNotRegistered();
         }
         employeeMap[employee].terminatedAt = block.timestamp;
+        employeeMap[employee].employedSince = 0;
+        employeeMap[employee].weeklyUsdSalary = 0;
+        employeeCount -= 1;
+        employeeMap[employee].accumulated = ((block.timestamp - employeeMap[employee].lastWithdrawalStamp) / 1 weeks) * employeeMap[employee].weeklyUsdSalary;
         emit EmployeeTerminated(employee);
     }
-    
+
+
 
     
 }
