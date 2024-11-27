@@ -75,8 +75,6 @@ abstract contract HumanResources is IHumanResources {
         employeeMap[employee].terminatedAt = block.timestamp;
         emit EmployeeTerminated(employee);
     }
-
-    function 
     
 
     
