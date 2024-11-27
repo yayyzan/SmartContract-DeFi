@@ -8,12 +8,14 @@ import './node_modules/@uniswap/v3-periphery/contracts/libraries/TransferHelper.
 import './node_modules/@openzeppelin/contracts/token/ERC20/IERC20.sol';
 
 
-abstract contract HumanResources is IHumanResources {
+contract HumanResources is IHumanResources {
 
-    address USDC = 0x0b2c639c533813f4aa9d7837caf62653d097ff85;
+    address USDC = 0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85;
     address ROUTER = 0x13e3Ee699D1909E989722E753853AE30b17e08c5;
+    address WETH = 0x4200000000000000000000000000000000000006;
+    address CHAINLINK = 0x13e3Ee699D1909E989722E753853AE30b17e08c5;
 
-    enum preferredPay {USDC, ETH}
+    uint256 USDC_D = 1e12;
 
     struct Employee{
         uint256 weeklyUsdSalary;
@@ -21,18 +23,22 @@ abstract contract HumanResources is IHumanResources {
         uint256 terminatedAt;
         uint256 accumulated;
         uint256 lastWithdrawalStamp;
-        preferredPay preference;
+        bool preferenceIsEth;
     }
 
     address public immutable hrManagerAddress; 
     mapping(address => Employee) private employeeMap;
-    address[] public employeeAddresses;
     uint256 employeeCount;
+
+    ISwapRouter swapRouter;
+    IERC20 usdc;
+    AggregatorV3Interface exchange;
 
     constructor(address _hrManager){
         hrManagerAddress = _hrManager; 
         swapRouter = ISwapRouter(ROUTER);
-        usdc = IERC(USDC);
+        usdc = IERC20(USDC);
+        exchange = AggregatorV3Interface(CHAINLINK);
     }
 
     modifier onlyHrManager(){
@@ -42,10 +48,26 @@ abstract contract HumanResources is IHumanResources {
 
     modifier onlyEmployee(){
         require(employeeMap[msg.sender].employedSince != 0, NotAuthorized());
+        _;
+    }
+
+    function ethPrice(uint256 usdcAmount) internal view returns (uint256) {
+        (, int256 price, , ,) = exchange.latestRoundData();
+        return (usdcAmount * 1e18) / uint256(price);
+    }
+
+    function computeSalary(address employee) internal view returns (uint256){
+        return ((block.timestamp - employeeMap[employee].lastWithdrawalStamp) / 1 weeks) * employeeMap[employee].weeklyUsdSalary;
     }
 
     function salaryAvailable (address employee) external view returns (uint256){
-        return ((block.timestamp - employeeMap[employee].lastWithdrawalStamp) / 1 weeks) * employeeMap[employee].weeklyUsdSalary;
+        uint256 pay = computeSalary(employee);
+        if(employeeMap[employee].preferenceIsEth == true){
+            return ethPrice(pay);
+        } else {
+            return pay/USDC_D;
+        }
+        
     }
 
     function hrManager() external view returns (address){
@@ -64,11 +86,11 @@ abstract contract HumanResources is IHumanResources {
     function swapUSDCForEth(uint256 usdcAmount, uint256 slippage) private returns (uint256) {
         usdc.approve(address(swapRouter), usdcAmount);
         ISwapRouter.ExactInputSingleParams memory params = ISwapRouter.ExactInputSingleParams({
-            tokenIn: USDC_ADDRESS,
-            tokenOut: WETH_ADDRESS,
-            fee: 500, 
+            tokenIn: USDC,
+            tokenOut: WETH,
+            fee: 3000, 
             recipient: address(this),
-            deadline: block.timestamp + 300,
+            deadline: block.timestamp + 30,
             amountIn: usdcAmount,
             amountOutMinimum: slippage,
             sqrtPriceLimitX96: 0
@@ -80,9 +102,8 @@ abstract contract HumanResources is IHumanResources {
     function registerEmployee (address employee, uint256 weeklyUsdSalary) onlyHrManager external {
         uint256 checkEmployee = employeeMap[employee].employedSince;
         if (checkEmployee == 0){
-            Employee memory newEmployee = Employee(weeklyUsdSalary, block.timestamp, 0, 0, block.timestamp, preferredPay.USDC);
+            Employee memory newEmployee = Employee(weeklyUsdSalary, block.timestamp, 0, 0, block.timestamp, false);
             employeeMap[employee] = newEmployee;
-            employeeAddresses.push(employee);
             employeeCount += 1;
             emit EmployeeRegistered(employee, weeklyUsdSalary);
         }
@@ -99,21 +120,28 @@ abstract contract HumanResources is IHumanResources {
         employeeMap[employee].employedSince = 0;
         employeeMap[employee].weeklyUsdSalary = 0;
         employeeCount -= 1;
-        employeeMap[employee].accumulated = ((block.timestamp - employeeMap[employee].lastWithdrawalStamp) / 1 weeks) * employeeMap[employee].weeklyUsdSalary;
+        employeeMap[employee].accumulated = computeSalary(employee);
         emit EmployeeTerminated(employee);
     }
 
     function withdrawSalary() onlyEmployee external {
-        uint256 preferredMethod = employeeMap[msg.sender].preference;
-        uint256 salary = employeeMap[msg.sender].accumulated + ((block.timestamp - employeeMap[msg.sender].lastWithdrawalStamp) / 1 weeks) * employeeMap[msg.sender].weeklyUsdSalary;
-        if(preferredMethod == preferredPay.ETH){
-            uint256 eth = swapUSDCForEth(salary, 0.3);
-            TransferHelper.safeTransferFrom(USDC, address(this), msg.sender, eth);
+        bool preferredMethod = employeeMap[msg.sender].preferenceIsEth;
+        uint256 salary = employeeMap[msg.sender].accumulated + computeSalary(msg.sender);
+        if(preferredMethod){
+            uint256 eth = swapUSDCForEth(salary, 2);
+            TransferHelper.safeTransferETH(msg.sender, eth);
         } else {
-            TransferHelper.safeTransferFrom(USDC, address(this), msg.sender, salary);
+            TransferHelper.safeTransferFrom(USDC, address(this), msg.sender, salary/USDC_D);
         }
-
+        employeeMap[msg.sender].accumulated = 0;
+        employeeMap[msg.sender].lastWithdrawalStamp = block.timestamp;
+        emit SalaryWithdrawn(msg.sender, preferredMethod, salary);
     }
 
+    function switchCurrency() onlyEmployee external {
+        this.withdrawSalary();
+        employeeMap[msg.sender].preferenceIsEth = !employeeMap[msg.sender].preferenceIsEth;
+        emit CurrencySwitched(msg.sender, employeeMap[msg.sender].preferenceIsEth);
+    }
     
 }
