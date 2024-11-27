@@ -48,9 +48,6 @@ abstract contract HumanResources is IHumanResources {
         return (employeeInfo.weeklyUsdSalary, employeeInfo.employedSince, employeeInfo.terminatedAt);
     } 
 
-    // set to 18 decimal places
-    // read spec! should i have an addresses array.
-    // complete implementation, check if accumulated salary should continue or not
     function registerEmployee (address employee, uint256 weeklyUsdSalary) onlyHrManager external {
         uint256 checkEmployee = employeeMap[employee].employedSince;
         uint256 checkEmployee2 = employeeMap[employee].terminatedAt;
